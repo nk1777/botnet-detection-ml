@@ -1,0 +1,96 @@
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report
+import shap
+import matplotlib.pyplot as plt
+import joblib
+
+# ------------------------------
+# 1. Loading Data
+# ------------------------------
+file_path = r"C:\Users\nanda\Desktop\FinalProject\CTU-13-Dataset\CTU-13-Dataset\1\capture20110810.binetflow"
+df = pd.read_csv(file_path)
+
+# Binary label (Botnet=1, Normal=0)
+df['Botnet'] = df['Label'].apply(lambda x: 1 if 'Botnet' in str(x) else 0)
+
+# ------------------------------
+# 2. Feature Engineering (Report Section 4.2)
+# ------------------------------
+selected_columns = ['Proto', 'State', 'TotPkts', 'TotBytes', 'SrcBytes', 'Dir', 'Dur', 'Botnet']
+df = df[selected_columns].dropna()
+
+# One-hot encoding (Report Chapter 4)
+df = pd.get_dummies(df, columns=['Proto', 'State', 'Dir'])
+
+# Engineered features (Report Section 4.2)
+df['BytesPerPacket'] = df['TotBytes'] / df['TotPkts'].replace(0, 1)
+df['PktRate'] = df['TotPkts'] / df['Dur'].replace(0, 1e-5)
+df['BytesPerSecond'] = df['TotBytes'] / df['Dur'].replace(0, 1e-5)
+df.fillna(0, inplace=True)
+
+# ------------------------------
+# 3. Train-Test Split (Report Section 4.3)
+# ------------------------------
+X = df.drop('Botnet', axis=1)
+y = df['Botnet']
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# ------------------------------
+# 4. Train Random Forest (Report Section 4.3.1)
+# ------------------------------
+model = RandomForestClassifier(
+    n_estimators=100,
+    max_depth=None,
+    random_state=42,
+    verbose=1           # Log training progress
+)
+model.fit(X_train, y_train)
+
+# ------------------------------
+# 5. Evaluate (Report Section 4.6.3)
+# ------------------------------
+y_pred = model.predict(X_test)
+print("\nClassification Report (Random Forest):")
+print(classification_report(y_test, y_pred, target_names=['Normal', 'Botnet']))
+
+# Save the trained model
+model_save_path = "botnet_rf_model.joblib"
+joblib.dump(model, model_save_path)
+print(f"Model saved to {model_save_path}")
+# --------------------
+# SHAP Plot Generation
+#---------------------
+sample_X = X_test.sample(n=500, random_state=42)
+
+# 3. Compute SHAP values properly
+explainer = shap.TreeExplainer(model)
+shap_values = explainer(sample_X)  # Newer SHAP API
+
+# For binary classification:
+if len(shap_values.shape) == 3:  # (n_samples, n_features, n_classes)
+    shap_values = shap_values[:,:,1]  # Take values for class 1 (Botnet)
+
+# 4. Create SHAP DataFrame
+shap_df = pd.DataFrame({
+    'Feature': sample_X.columns.tolist(),
+    'Mean_Abs_SHAP': np.mean(np.abs(shap_values.values), axis=0)  # Use .values for array
+}).sort_values('Mean_Abs_SHAP', ascending=False)
+
+# 5. Generate the plot
+plt.figure(figsize=(10, 6))
+plt.barh(shap_df['Feature'][:15],
+         shap_df['Mean_Abs_SHAP'][:15],
+         color='#20639B')
+plt.xlabel("Mean Absolute SHAP Value")
+plt.title("Top 15 Features by SHAP Impact (Random Forest)")
+plt.gca().invert_yaxis()  # Highest impact at top
+plt.tight_layout()
+plt.savefig("shap_summary_rf.png", dpi=300, bbox_inches='tight')
+plt.close()
+
+print("SHAP analysis completed successfully!")
+print("Top 5 Features:")
+print(shap_df.head())
